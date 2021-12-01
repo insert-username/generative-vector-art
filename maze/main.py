@@ -203,27 +203,106 @@ class Generator:
         else:
             return random.choice(sub_neighbor_pool)
 
+class MazeCoordTranslator:
+
+    def __init__(self, maze, line_width, svg_x0, svg_y0, svg_width, svg_height):
+        self.line_width = line_width
+        self.svg_x0 = svg_x0
+        self.svg_y0 = svg_y0
+        self.svg_width = svg_width
+        self.svg_height = svg_height
+
+        self.row_height = svg_height / maze.rows
+        self.column_width = svg_width / maze.columns
+
+        self.wall_length = self.column_width - self.line_width
+        self.wall_height = self.row_height - self.line_width
+
+    # returns the cell boundary coords
+    def get_cell(self, row, column):
+        x0 = self.svg_x0 + self.column_width * column
+        x1 = self.svg_x0 + self.column_width * (column + 1)
+
+        y0 = self.svg_y0 + self.row_height * row
+        y1 = self.svg_y0 + self.row_height * (row + 1)
+
+        return (x0, y0, x1, y1)
+
+    def get_cell_interior(self, row, column):
+        x0, y0, x1, y1 = self.get_cell(row, column)
+
+        hlw = self.line_width / 2
+
+        return (x0 + hlw, y0 + hlw, x1 - hlw, y1 - hlw)
+
+    def get_cell_exterior(self, row, column):
+        x0, y0, x1, y1 = self.get_cell(row, column)
+
+        hlw = self.line_width / 2
+
+        return (x0 - hlw, y0 - hlw, x1 + hlw, y1 + hlw)
+
+    def get_north_wall_rect(self, row, column):
+        x0_int, y0_int, x1_int, y1_int = self.get_cell_interior(row, column)
+        x0_ext, y0_ext, x1_ext, y1_ext = self.get_cell_exterior(row, column)
+
+        return (x0_int, y0_ext, self.wall_length, self.line_width)
+
+    def get_south_wall_rect(self, row, column):
+        x0_int, y0_int, x1_int, y1_int = self.get_cell_interior(row, column)
+        x0_ext, y0_ext, x1_ext, y1_ext = self.get_cell_exterior(row, column)
+
+        return (x0_int, y1_int, self.wall_length, self.line_width)
+
+    def get_east_wall_rect(self, row, column):
+        x0_int, y0_int, x1_int, y1_int = self.get_cell_interior(row, column)
+        x0_ext, y0_ext, x1_ext, y1_ext = self.get_cell_exterior(row, column)
+
+        return (x1_int, y0_int, self.line_width, self.wall_height)
+
+    def get_west_wall_rect(self, row, column):
+        x0_int, y0_int, x1_int, y1_int = self.get_cell_interior(row, column)
+        x0_ext, y0_ext, x1_ext, y1_ext = self.get_cell_exterior(row, column)
+
+        return (x0_ext, y0_int, self.line_width, self.wall_height)
+
+    def get_bottom_right_corner_rect(self, row, column):
+        x0_int, y0_int, x1_int, y1_int = self.get_cell_interior(row, column)
+        x0_ext, y0_ext, x1_ext, y1_ext = self.get_cell_exterior(row, column)
+        return (x1_int, y1_int, self.line_width, self.line_width)
+
+    @staticmethod
+    def rect(c, rect):
+        c.rectangle(rect[0], rect[1], rect[2], rect[3])
+
 def create_coaster(maze, output_file, svg_width=400, svg_height=400, border_width=None, line_width=1):
     border_width = border_width if border_width is not None else svg_width / 8
     arc_r = border_width
 
+    translator = MazeCoordTranslator(maze,
+                                     line_width,
+                                     border_width,
+                                     border_width,
+                                     svg_width - border_width * 2,
+                                     svg_height - border_width * 2)
+
+    # surface representing the "fill" of the maze
     surface = cairo.SVGSurface(output_file + ".svg", svg_width, svg_height)
     c = cairo.Context(surface)
     render_maze(maze,
             output_file,
             c,
-            line_width,
-            border_width,
-            border_width,
-            svg_width - border_width * 2,
-            svg_height - border_width * 2)
+            translator)
     surface.finish()
 
-    surface = cairo.SVGSurface(output_file + "-bbox.svg", svg_width, svg_height)
+    surface = cairo.SVGSurface(output_file + "-path.svg", svg_width, svg_height)
     c = cairo.Context(surface)
+    render_interior_path(maze, c, translator)
+    surface.finish()
 
     # create the bounding box
-
+    surface = cairo.SVGSurface(output_file + "-bbox.svg", svg_width, svg_height)
+    c = cairo.Context(surface)
     c.move_to(border_width, 0)
     c.line_to(svg_width - border_width, 0)
     c.arc(svg_width - border_width, border_width, arc_r, - math.pi / 2, 0)
@@ -237,25 +316,84 @@ def create_coaster(maze, output_file, svg_width=400, svg_height=400, border_widt
 
     c.set_line_width(line_width)
     c.stroke()
-
     surface.finish()
 
-def render_maze(maze, output_file, c, line_width, svg_x0, svg_y0, svg_width, svg_height):
 
+def render_interior_path(maze, c, translator):
     c.set_source_rgb(0, 0, 0)
 
-    row_height = svg_height / maze.rows
-    column_width = svg_width / maze.columns
+    # draw the bounding box (all exterior walls)
+    top_left = translator.get_cell_exterior(0, 0)
+    bottom_right = translator.get_cell_exterior(maze.rows - 1, maze.columns - 1)
+
+    c.rectangle(top_left[0], top_left[1], bottom_right[2] - top_left[0], bottom_right[3] - top_left[1])
+    c.stroke()
 
     for row in range(-1, maze.rows):
         for column in range(-1, maze.columns):
-            x0 = svg_x0 + column_width * column
-            x1 = svg_x0 + column_width * (column + 1)
 
-            y0 = svg_y0 + row_height * row
-            y1 = svg_y0 + row_height * (row + 1)
+            br = translator.get_bottom_right_corner_rect(row, column)
 
-            c.rectangle(x1 - line_width / 2, y1 - line_width / 2, line_width, line_width)
+            # if cell below does not have east wall, render bottom of rectangle
+            if row < maze.rows -1 and not maze.cells[row + 1][column].walls["east"]:
+                c.move_to(br[0],         br[1] + br[3])
+                c.line_to(br[0] + br[2], br[1] + br[3])
+                c.stroke()
+
+            if column < maze.columns -1 and not maze.cells[row][column + 1].walls["south"]:
+                c.move_to(br[0] + br[2], br[1])
+                c.line_to(br[0] + br[2], br[1] + br[3])
+                c.stroke()
+
+            if row < 0 or column < 0:
+                continue
+
+            if not maze.cells[row][column].walls["east"]:
+                c.move_to(br[0],         br[1])
+                c.line_to(br[0] + br[2], br[1])
+                c.stroke()
+
+            if not maze.cells[row][column].walls["south"]:
+                c.move_to(br[0], br[1])
+                c.line_to(br[0], br[1] + br[3])
+                c.stroke()
+
+            has_north = maze.cells[row][column].walls["north"]
+            has_south = maze.cells[row][column].walls["south"]
+            has_east = maze.cells[row][column].walls["east"]
+            has_west = maze.cells[row][column].walls["west"]
+
+            x0_int, y0_int, x1_int, y1_int = translator.get_cell_interior(row, column)
+
+            if has_north:
+                c.move_to(x0_int, y0_int)
+                c.line_to(x1_int, y0_int)
+                c.stroke()
+
+            if has_south:
+                c.move_to(x0_int, y1_int)
+                c.line_to(x1_int, y1_int)
+                c.stroke()
+
+            if has_east:
+                c.move_to(x1_int, y0_int)
+                c.line_to(x1_int, y1_int)
+                c.stroke()
+
+            if has_west:
+                c.move_to(x0_int, y0_int)
+                c.line_to(x0_int, y1_int)
+                c.stroke()
+
+
+def render_maze(maze, output_file, c, translator):
+    c.set_source_rgb(0, 0, 0)
+
+    for row in range(-1, maze.rows):
+        for column in range(-1, maze.columns):
+
+            # fill the bottom right corner
+            MazeCoordTranslator.rect(c, translator.get_bottom_right_corner_rect(row, column))
             c.fill()
 
             if row < 0 or column < 0:
@@ -267,20 +405,21 @@ def render_maze(maze, output_file, c, line_width, svg_x0, svg_y0, svg_width, svg
             has_west = maze.cells[row][column].walls["west"]
 
             if has_north:
-                c.rectangle(x0 + line_width / 2, y0 - line_width / 2, column_width - line_width, line_width)
+                MazeCoordTranslator.rect(c, translator.get_north_wall_rect(row, column))
                 c.fill()
 
             if has_west:
-                c.rectangle(x0 - line_width / 2, y0 + line_width / 2, line_width, row_height - line_width)
+                MazeCoordTranslator.rect(c, translator.get_west_wall_rect(row, column))
                 c.fill()
 
             if (row == maze.rows - 1):
                 if has_south:
-                    c.rectangle(x0 + line_width / 2, y1 - line_width / 2, column_width - line_width, line_width)
+                    MazeCoordTranslator.rect(c, translator.get_south_wall_rect(row, column))
                     c.fill()
+
             if column == maze.columns - 1:
                 if has_east:
-                    c.rectangle(x1 - line_width / 2, y0 + line_width / 2, line_width, row_height - line_width)
+                    MazeCoordTranslator.rect(c, translator.get_east_wall_rect(row, column))
                     c.fill()
 
 class ImageBiasProvider:
