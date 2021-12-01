@@ -2,6 +2,8 @@
 
 import cairo
 
+from PIL import Image, ImageOps
+
 import math
 import random
 import argparse
@@ -38,6 +40,12 @@ class Cell:
                 "east": None,
                 "west": None
             }
+
+    def get_row(self):
+        return self._row
+
+    def get_column(self):
+        return self._column
 
     def north(self):
         return self.neighbors["north"]
@@ -131,10 +139,11 @@ class Maze:
 
 class Generator:
 
-    def __init__(self, maze):
+    def __init__(self, maze, bias_provider):
         self.cell_stack = []
         self.visited_cells = set()
         self.maze = maze
+        self.bias_provider = bias_provider
 
     def step(self):
 
@@ -154,7 +163,7 @@ class Generator:
         if (len(unvisited_neighbors) == 0):
             self.cell_stack.pop()
         else:
-            selected_neighbor = random.choice(unvisited_neighbors)
+            selected_neighbor = self._select_neighbor(current_cell, unvisited_neighbors)
 
             current_cell.knock_walls(selected_neighbor)
 
@@ -173,6 +182,26 @@ class Generator:
 
 
         return result
+
+    def _select_neighbor(self, cell, neighbors):
+        bias = self.bias_provider.get_cell_bias(cell)
+
+        selected_neighbor = random.choice(neighbors)
+
+        if bias == 0 or random.uniform(0.0, 1.0) > abs(bias):
+            return selected_neighbor
+
+        sub_neighbor_pool = []
+        if bias < 0:
+            sub_neighbor_pool = [n for n in neighbors if n.get_row() == cell.get_row()]
+        elif bias > 0:
+            sub_neighbor_pool = [n for n in neighbors if n.get_column() == cell.get_column()]
+
+        if len(sub_neighbor_pool) == 0:
+            # no ideal choices available, so select the original
+            return selected_neighbor
+        else:
+            return random.choice(sub_neighbor_pool)
 
 def create_coaster(maze, output_file, svg_width=400, svg_height=400, border_width=None, line_width=1):
     border_width = border_width if border_width is not None else svg_width / 8
@@ -254,6 +283,24 @@ def render_maze(maze, output_file, c, line_width, svg_x0, svg_y0, svg_width, svg
                     c.rectangle(x1 - line_width / 2, y0 + line_width / 2, line_width, row_height - line_width)
                     c.fill()
 
+class ImageBiasProvider:
+
+    def __init__(self, source_image, maze):
+        self.source_image = ImageOps.grayscale(source_image.resize((maze.rows, maze.columns)))
+
+    def get_cell_bias(self, cell):
+        pixel = self.source_image.getpixel((cell.get_column(), cell.get_row()))
+
+        return (pixel / 255) * 2 - 1
+
+class ConstBiasProvider:
+
+    def __init__(self, value):
+        self.value = value
+
+    def get_cell_bias(self, cell):
+        return self.value
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate laser cutter maze templates.")
     parser.add_argument("--rows", metavar="ROWS", type=int, default=32)
@@ -262,13 +309,19 @@ if __name__ == "__main__":
     parser.add_argument("--svg_width", type=int, default=400)
     parser.add_argument("--border_size", type=float, default=80)
     parser.add_argument("--cell_line_width", type=float, default=3)
+    parser.add_argument("--bias_image", nargs='?', type=str, default=None)
     parser.add_argument("output_file")
 
     args = parser.parse_args()
 
     maze = Maze(args.rows, args.columns)
 
-    gen = Generator(maze)
+    bias_provider = ConstBiasProvider(0)
+    if args.bias_image is not None:
+        image = Image.open(args.bias_image)
+        bias_provider = ImageBiasProvider(image, maze)
+
+    gen = Generator(maze, bias_provider)
 
     image_index = 0
     while not gen.step():
