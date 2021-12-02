@@ -4,6 +4,8 @@ import cairo
 
 from PIL import Image, ImageOps
 
+from enum import Enum
+
 import math
 import random
 import argparse
@@ -20,6 +22,11 @@ MAZE_COLUMNS=20
 #    if all have been visited
 #      pop from stack
 
+class Directions(Enum):
+    NORTH="north"
+    SOUTH="south"
+    EAST="east"
+    WEST="west"
 
 class Cell:
 
@@ -28,17 +35,17 @@ class Cell:
         self._column = column
 
         self.walls = {
-                "north": True,
-                "south": True,
-                "east": True,
-                "west": True
+                Directions.NORTH: True,
+                Directions.SOUTH: True,
+                Directions.EAST: True,
+                Directions.WEST: True
             }
 
         self.neighbors = {
-                "north": None,
-                "south": None,
-                "east": None,
-                "west": None
+                Directions.NORTH: None,
+                Directions.SOUTH: None,
+                Directions.EAST: None,
+                Directions.WEST: None
             }
 
     def get_row(self):
@@ -48,49 +55,56 @@ class Cell:
         return self._column
 
     def north(self):
-        return self.neighbors["north"]
+        return self.neighbors[Directions.NORTH]
 
     def south(self):
-        return self.neighbors["south"]
+        return self.neighbors[Directions.SOUTH]
 
     def east(self):
-        return self.neighbors["east"]
+        return self.neighbors[Directions.EAST]
 
     def west(self):
-        return self.neighbors["west"]
+        return self.neighbors[Directions.WEST]
 
     def set_north(self, other):
-        self.neighbors["north"] = other
-        other.neighbors["south"] = self
+        self.neighbors[Directions.NORTH] = other
+        other.neighbors[Directions.SOUTH] = self
 
     def set_south(self, other):
-        self.neighbors["south"] = other
-        other.neighbors["north"] = self
+        self.neighbors[Directions.SOUTH] = other
+        other.neighbors[Directions.NORTH] = self
 
     def set_east(self, other):
-        self.neighbors["east"] = other
-        other.neighbors["west"] = self
+        self.neighbors[Directions.EAST] = other
+        other.neighbors[Directions.WEST] = self
 
     def set_west(self, other):
-        self.neighbors["west"] = other
-        other.neighbors["east"] = self
+        self.neighbors[Directions.WEST] = other
+        other.neighbors[Directions.EAST] = self
+
+    def get_direction_to(self, other):
+        for n, d in self.neighbors.items():
+            if n == other:
+                return d
+
+        return None
 
     def knock_walls(self, other):
         if (self.east() is not None and self.east() == other and other.west() == self):
-            self.walls["east"] = False
-            other.walls["west"] = False
+            self.walls[Directions.EAST] = False
+            other.walls[Directions.WEST] = False
 
         elif (self.west() is not None and self.west() == other and other.east() == self):
-            self.walls["west"] = False
-            other.walls["east"] = False
+            self.walls[Directions.WEST] = False
+            other.walls[Directions.EAST] = False
 
         elif (self.north() is not None and self.north() == other and other.south() == self):
-            self.walls["north"] = False
-            other.walls["south"] = False
+            self.walls[Directions.NORTH] = False
+            other.walls[Directions.SOUTH] = False
 
         elif (self.south() is not None and self.south() == other and other.north() == self):
-            self.walls["south"] = False
-            other.walls["north"] = False
+            self.walls[Directions.SOUTH] = False
+            other.walls[Directions.NORTH] = False
         else:
             my_neighbors = ""
             for direction, neighbor in self.neighbors.items():
@@ -139,11 +153,11 @@ class Maze:
 
 class Generator:
 
-    def __init__(self, maze, bias_provider):
+    def __init__(self, maze, neighbor_selector):
         self.cell_stack = []
         self.visited_cells = set()
         self.maze = maze
-        self.bias_provider = bias_provider
+        self.neighbor_selector = neighbor_selector
 
     def step(self):
 
@@ -163,13 +177,12 @@ class Generator:
         if (len(unvisited_neighbors) == 0):
             self.cell_stack.pop()
         else:
-            selected_neighbor = self._select_neighbor(current_cell, unvisited_neighbors)
+            selected_neighbor = self.neighbor_selector.select_neighbor(current_cell, unvisited_neighbors)
 
             current_cell.knock_walls(selected_neighbor)
 
             self.cell_stack.append(selected_neighbor)
             self.visited_cells.add(selected_neighbor)
-
 
         return False
 
@@ -183,25 +196,6 @@ class Generator:
 
         return result
 
-    def _select_neighbor(self, cell, neighbors):
-        bias = self.bias_provider.get_cell_bias(cell)
-
-        selected_neighbor = random.choice(neighbors)
-
-        if bias == 0 or random.uniform(0.0, 1.0) > abs(bias):
-            return selected_neighbor
-
-        sub_neighbor_pool = []
-        if bias < 0:
-            sub_neighbor_pool = [n for n in neighbors if n.get_row() == cell.get_row()]
-        elif bias > 0:
-            sub_neighbor_pool = [n for n in neighbors if n.get_column() == cell.get_column()]
-
-        if len(sub_neighbor_pool) == 0:
-            # no ideal choices available, so select the original
-            return selected_neighbor
-        else:
-            return random.choice(sub_neighbor_pool)
 
 class MazeCoordTranslator:
 
@@ -335,12 +329,12 @@ def render_interior_path(maze, c, translator):
             br = translator.get_bottom_right_corner_rect(row, column)
 
             # if cell below does not have east wall, render bottom of rectangle
-            if row < maze.rows -1 and not maze.cells[row + 1][column].walls["east"]:
+            if row < maze.rows -1 and not maze.cells[row + 1][column].walls[Directions.EAST]:
                 c.move_to(br[0],         br[1] + br[3])
                 c.line_to(br[0] + br[2], br[1] + br[3])
                 c.stroke()
 
-            if column < maze.columns -1 and not maze.cells[row][column + 1].walls["south"]:
+            if column < maze.columns -1 and not maze.cells[row][column + 1].walls[Directions.SOUTH]:
                 c.move_to(br[0] + br[2], br[1])
                 c.line_to(br[0] + br[2], br[1] + br[3])
                 c.stroke()
@@ -348,20 +342,20 @@ def render_interior_path(maze, c, translator):
             if row < 0 or column < 0:
                 continue
 
-            if not maze.cells[row][column].walls["east"]:
+            if not maze.cells[row][column].walls[Directions.EAST]:
                 c.move_to(br[0],         br[1])
                 c.line_to(br[0] + br[2], br[1])
                 c.stroke()
 
-            if not maze.cells[row][column].walls["south"]:
+            if not maze.cells[row][column].walls[Directions.SOUTH]:
                 c.move_to(br[0], br[1])
                 c.line_to(br[0], br[1] + br[3])
                 c.stroke()
 
-            has_north = maze.cells[row][column].walls["north"]
-            has_south = maze.cells[row][column].walls["south"]
-            has_east = maze.cells[row][column].walls["east"]
-            has_west = maze.cells[row][column].walls["west"]
+            has_north = maze.cells[row][column].walls[Directions.NORTH]
+            has_south = maze.cells[row][column].walls[Directions.SOUTH]
+            has_east = maze.cells[row][column].walls[Directions.EAST]
+            has_west = maze.cells[row][column].walls[Directions.WEST]
 
             x0_int, y0_int, x1_int, y1_int = translator.get_cell_interior(row, column)
 
@@ -399,10 +393,10 @@ def render_maze(maze, output_file, c, translator):
             if row < 0 or column < 0:
                 continue
 
-            has_north = maze.cells[row][column].walls["north"]
-            has_south = maze.cells[row][column].walls["south"]
-            has_east = maze.cells[row][column].walls["east"]
-            has_west = maze.cells[row][column].walls["west"]
+            has_north = maze.cells[row][column].walls[Directions.NORTH]
+            has_south = maze.cells[row][column].walls[Directions.SOUTH]
+            has_east = maze.cells[row][column].walls[Directions.EAST]
+            has_west = maze.cells[row][column].walls[Directions.WEST]
 
             if has_north:
                 MazeCoordTranslator.rect(c, translator.get_north_wall_rect(row, column))
@@ -421,6 +415,49 @@ def render_maze(maze, output_file, c, translator):
                 if has_east:
                     MazeCoordTranslator.rect(c, translator.get_east_wall_rect(row, column))
                     c.fill()
+
+"""
+class DeterministicNeighborSelector:
+
+    def __init__(self):
+        self.last_direction = None
+        self.
+
+class DirectionalBiasedNeighborSelector:
+
+    def __init__(self, directional_bias_provider):
+        self.dir_bias_provider = directional_bias_provider
+
+    def select_neighbor(self, cell, neighbors):
+        # assign a score to each candidate neighbor based on
+        # how well it conforms to the bias
+
+    def _rank_neighbor(self, cell
+"""
+
+class BiasedNeighborSelector:
+
+    def __init__(self, bias_provider):
+        self.bias_provider = bias_provider
+
+    def select_neighbor(self, cell, neighbors):
+        bias = self.bias_provider.get_cell_bias(cell)
+        selected_neighbor = random.choice(neighbors)
+
+        if bias == 0 or random.uniform(0.0, 1.0) > abs(bias):
+            return selected_neighbor
+
+        sub_neighbor_pool = []
+        if bias < 0:
+            sub_neighbor_pool = [n for n in neighbors if n.get_row() == cell.get_row()]
+        elif bias > 0:
+            sub_neighbor_pool = [n for n in neighbors if n.get_column() == cell.get_column()]
+
+        if len(sub_neighbor_pool) == 0:
+            # no ideal choices available, so select the original
+            return selected_neighbor
+        else:
+            return random.choice(sub_neighbor_pool)
 
 class ImageBiasProvider:
 
@@ -456,11 +493,13 @@ if __name__ == "__main__":
     maze = Maze(args.rows, args.columns)
 
     bias_provider = ConstBiasProvider(0)
+
     if args.bias_image is not None:
         image = Image.open(args.bias_image)
         bias_provider = ImageBiasProvider(image, maze)
 
-    gen = Generator(maze, bias_provider)
+    neighbor_selector = BiasedNeighborSelector(bias_provider)
+    gen = Generator(maze, neighbor_selector)
 
     image_index = 0
     while not gen.step():
