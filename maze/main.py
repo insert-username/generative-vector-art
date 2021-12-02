@@ -29,7 +29,27 @@ class Directions(Enum):
     WEST="west"
 
     def is_vertical(self):
-        return self.value == Directions.NORTH or self.value == Directions.SOUTH
+        return self == Directions.NORTH or self == Directions.SOUTH
+
+    def rotate_clockwise(self):
+        if self == Directions.NORTH:
+            return Directions.EAST
+        elif self == Directions.EAST:
+            return Directions.SOUTH
+        elif self == Directions.SOUTH:
+            return Directions.WEST
+        elif self == Directions.WEST:
+            return Directions.NORTH
+
+    def rotate_counter_clockwise(self):
+        if self == Directions.NORTH:
+            return Directions.WEST
+        elif self == Directions.WEST:
+            return Directions.SOUTH
+        elif self == Directions.SOUTH:
+            return Directions.EAST
+        elif self == Directions.EAST:
+            return Directions.NORTH
 
 class Cell:
 
@@ -444,60 +464,138 @@ class DirectionalBiasedNeighborSelector:
         if direction is None:
             raise RuntimeError(f"Could not find direction between {cell} and {neighbor}")
 
-        return self.dir_bias_provider.get_bias(
-                cell.get_direction_to(neighbor))
+        return self.dir_bias_provider.get_bias(cell, direction)
+
+
+
+class CurlingNS:
+
+    class BiasProvider:
+        def __init__(self, direction):
+            self.direction = direction
+
+        def get_bias(self, cell, direction):
+            #exact numbers don't matter too much as long as there is a gap
+            if direction == self.direction:
+                return random.uniform(1.0, 2.0)
+            else:
+                return random.uniform(0.0, 0.5)
+
+    def __init__(self):
+        self.direction = Directions.NORTH
+        self.dir_count = 0
+
+    def select_neighbor(self, cell, neighbors):
+
+        if self.dir_count == 0:
+            self.direction = self._get_dir_rotated()
+            self.dir_count = self._get_dir_limit()
+        else:
+            self.dir_count -= 1
+
+        bias_provider = CurlingNS.BiasProvider(self.direction)
+
+        ns = DirectionalBiasedNeighborSelector(bias_provider)
+
+        next_neighbor = ns.select_neighbor(cell, neighbors)
+
+        actual_next_direction = cell.get_direction_to(next_neighbor)
+
+        if actual_next_direction != self.direction:
+            self.dir_count = self._get_dir_limit()
+            self.direction = self._get_dir_rotated()
+
+        return next_neighbor
+
+    def _get_dir_rotated(self):
+        if bool(random.getrandbits(1)):
+            return self.direction.rotate_clockwise()
+        else:
+            return self.direction.rotate_counter_clockwise()
+
+    def _get_dir_limit(self):
+        return int(random.uniform(3, 5) * 3)
+
 
 class ConstDirectionalBiasProvider:
     def __init__(self, value):
         self.value = value
 
-    def get_bias(self, direction):
+    def get_bias(self, cell, direction):
         if direction.is_vertical():
-            return random.uniform(0, 1.0 - self.value)
+            result = random.uniform(0, 1.0 - self.value)
+            return result
         else:
-            return random.uniform(0, self.value)
+            result = random.uniform(0, self.value)
+            return result
 
-class BiasedNeighborSelector:
-
-    def __init__(self, bias_provider):
-        self.bias_provider = bias_provider
-
-    def select_neighbor(self, cell, neighbors):
-        bias = self.bias_provider.get_cell_bias(cell)
-        selected_neighbor = random.choice(neighbors)
-
-        if bias == 0 or random.uniform(0.0, 1.0) > abs(bias):
-            return selected_neighbor
-
-        sub_neighbor_pool = []
-        if bias < 0:
-            sub_neighbor_pool = [n for n in neighbors if n.get_row() == cell.get_row()]
-        elif bias > 0:
-            sub_neighbor_pool = [n for n in neighbors if n.get_column() == cell.get_column()]
-
-        if len(sub_neighbor_pool) == 0:
-            # no ideal choices available, so select the original
-            return selected_neighbor
-        else:
-            return random.choice(sub_neighbor_pool)
-
-class ImageBiasProvider:
+class MazeImageInterrogator:
 
     def __init__(self, source_image, maze):
         self.source_image = ImageOps.grayscale(source_image.resize((maze.rows, maze.columns)))
 
-    def get_cell_bias(self, cell):
-        pixel = self.source_image.getpixel((cell.get_column(), cell.get_row()))
+    def get_cell_pix_norm(self, cell):
+        return self.get_pixel_normalized(cell.get_row(), cell.get_column())
 
-        return (pixel / 255) * 2 - 1
+    def get_pixel_normalized(self, row, column):
+        pixel = self.source_image.getpixel((column, row))
+        return pixel / 255.0
 
-class ConstBiasProvider:
+class ImageDelegatingNS:
 
-    def __init__(self, value):
-        self.value = value
+    def __init__(self, source_image, maze, delegate_a, delegate_b):
+        self.int = MazeImageInterrogator(source_image, maze)
+        self.del_a = delegate_a
+        self.del_b = delegate_b
 
-    def get_cell_bias(self, cell):
-        return self.value
+    def select_neighbor(self, cell, neighbors):
+        pixel = self.int.get_cell_pix_norm(cell)
+
+        if random.uniform(0.0, 1.0) < pixel:
+            return self.del_a.select_neighbor(cell, neighbors)
+        else:
+            return self.del_b.select_neighbor(cell, neighbors)
+
+class ImageDirectionalBiasProvider:
+
+    def __init__(self, source_image, maze):
+        self.int = MazeImageInterrogator(source_image, maze)
+
+    def get_bias(self, cell, direction):
+        phase = self.int.get_cell_pix_norm(cell) * 2 * math.pi
+
+        bias_horizontal = (math.cos(phase) + 1) / 2
+        bias_vertical = (math.cos(phase) + 1) / 2
+
+        limit = 0
+        if direction.is_vertical():
+            if direction == Directions.NORTH:
+                limit = bias_vertical
+            else:
+                limit = 1.0 - bias_vertical
+        else:
+            if direction == Directions.EAST:
+                limit = bias_horizontal
+            else:
+                limit = 1.0 - bias_horizontal
+
+        return random.uniform(0, limit)
+
+class ImageDirectionalBWBiasProvider:
+
+    def __init__(self, source_image, maze):
+        self.int = MazeImageInterrogator(source_image, maze)
+
+    def get_bias(self, cell, direction):
+        phase = self.int.get_cell_pix_norm(cell)
+
+        if pixel < 0 or pixel > 1:
+            raise RuntimeError("Pixel value must be normalized")
+
+        if direction.is_vertical():
+            return random.uniform(0, 1.0 - pixel)
+        else:
+            return random.uniform(0, pixel)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate laser cutter maze templates.")
@@ -515,14 +613,15 @@ if __name__ == "__main__":
     maze = Maze(args.rows, args.columns)
 
     bias_provider = ConstDirectionalBiasProvider(0.5)
-
-    """
+    neighbor_selector = CurlingNS() # DirectionalBiasedNeighborSelector(bias_provider)
     if args.bias_image is not None:
         image = Image.open(args.bias_image)
-        bias_provider = ImageBiasProvider(image, maze)
-    """
+        bias_provider = ImageDirectionalBWBiasProvider(image, maze)
 
-    neighbor_selector = DirectionalBiasedNeighborSelector(bias_provider)
+        neighbor_selector = ImageDelegatingNS(image, maze, \
+                DirectionalBiasedNeighborSelector(ConstDirectionalBiasProvider(0.2)),
+                DirectionalBiasedNeighborSelector(ConstDirectionalBiasProvider(0.8)))
+
     gen = Generator(maze, neighbor_selector)
 
     image_index = 0
