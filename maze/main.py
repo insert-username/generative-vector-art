@@ -28,6 +28,9 @@ class Directions(Enum):
     EAST="east"
     WEST="west"
 
+    def is_vertical(self):
+        return self.value == Directions.NORTH or self.value == Directions.SOUTH
+
 class Cell:
 
     def __init__(self, row, column):
@@ -83,7 +86,7 @@ class Cell:
         other.neighbors[Directions.EAST] = self
 
     def get_direction_to(self, other):
-        for n, d in self.neighbors.items():
+        for d, n in self.neighbors.items():
             if n == other:
                 return d
 
@@ -117,7 +120,14 @@ class Cell:
             raise RuntimeError(f"Cell is not a neighbor,\n\nmy {self} neighbors {my_neighbors},\n\ntheir {other} neighbors {other_neighbors}")
 
     def __str__(self):
-        return f"({self._row}, {self._column} {id(self)})"
+        result = f"({self._row}, {self._column} {id(self)})"
+
+        for d, neighbor in self.neighbors.items():
+            result += "\n" + d.name + ": " + str(id(neighbor))
+
+        result += "\n"
+
+        return result
 
 class Maze:
 
@@ -416,13 +426,6 @@ def render_maze(maze, output_file, c, translator):
                     MazeCoordTranslator.rect(c, translator.get_east_wall_rect(row, column))
                     c.fill()
 
-"""
-class DeterministicNeighborSelector:
-
-    def __init__(self):
-        self.last_direction = None
-        self.
-
 class DirectionalBiasedNeighborSelector:
 
     def __init__(self, directional_bias_provider):
@@ -431,9 +434,28 @@ class DirectionalBiasedNeighborSelector:
     def select_neighbor(self, cell, neighbors):
         # assign a score to each candidate neighbor based on
         # how well it conforms to the bias
+        ordered_neighbors = sorted(neighbors, key=lambda n: self._rank_neighbor(cell, n))
 
-    def _rank_neighbor(self, cell
-"""
+        return ordered_neighbors[-1]
+
+    def _rank_neighbor(self, cell, neighbor):
+        direction = cell.get_direction_to(neighbor)
+
+        if direction is None:
+            raise RuntimeError(f"Could not find direction between {cell} and {neighbor}")
+
+        return self.dir_bias_provider.get_bias(
+                cell.get_direction_to(neighbor))
+
+class ConstDirectionalBiasProvider:
+    def __init__(self, value):
+        self.value = value
+
+    def get_bias(self, direction):
+        if direction.is_vertical():
+            return random.uniform(0, 1.0 - self.value)
+        else:
+            return random.uniform(0, self.value)
 
 class BiasedNeighborSelector:
 
@@ -492,13 +514,15 @@ if __name__ == "__main__":
 
     maze = Maze(args.rows, args.columns)
 
-    bias_provider = ConstBiasProvider(0)
+    bias_provider = ConstDirectionalBiasProvider(0.5)
 
+    """
     if args.bias_image is not None:
         image = Image.open(args.bias_image)
         bias_provider = ImageBiasProvider(image, maze)
+    """
 
-    neighbor_selector = BiasedNeighborSelector(bias_provider)
+    neighbor_selector = DirectionalBiasedNeighborSelector(bias_provider)
     gen = Generator(maze, neighbor_selector)
 
     image_index = 0
