@@ -216,6 +216,10 @@ class Generator:
 
         return False
 
+    def run_all_steps(self):
+        while not self.step():
+            pass
+
     def _get_unvisited_neighbors(self, cell):
         result = []
 
@@ -481,9 +485,10 @@ class CurlingNS:
             else:
                 return random.uniform(0.0, 0.5)
 
-    def __init__(self):
+    def __init__(self, dir_limit=5):
         self.direction = Directions.NORTH
         self.dir_count = 0
+        self._dir_limit = 5
 
     def select_neighbor(self, cell, neighbors):
 
@@ -514,7 +519,9 @@ class CurlingNS:
             return self.direction.rotate_counter_clockwise()
 
     def _get_dir_limit(self):
-        return int(random.uniform(3, 5) * 3)
+        minimum = int(max(0, random.uniform(0, self._dir_limit)))
+
+        return int(random.uniform(minimum, self._dir_limit))
 
 
 class ConstDirectionalBiasProvider:
@@ -613,7 +620,7 @@ if __name__ == "__main__":
     maze = Maze(args.rows, args.columns)
 
     bias_provider = ConstDirectionalBiasProvider(0.5)
-    neighbor_selector = CurlingNS() # DirectionalBiasedNeighborSelector(bias_provider)
+    neighbor_selector = DirectionalBiasedNeighborSelector(bias_provider) # or could use CurlingNS
     if args.bias_image is not None:
         image = Image.open(args.bias_image)
         bias_provider = ImageDirectionalBWBiasProvider(image, maze)
