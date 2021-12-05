@@ -105,6 +105,7 @@ if __name__ == "__main__":
     parser.add_argument("--branch", metavar="BRANCH", type=str, nargs="+", action="append")
     parser.add_argument("--start_depth", metavar="START_DEPTH", type=int, default=0, required=False)
     parser.add_argument("--end_depth", metavar="END_DEPTH", type=int)
+    parser.add_argument("--line_width", metavar="LINE_WIDTH", type=float, default=1)
     parser.add_argument("output_file", metavar="OUTPUT_FILE", type=str)
 
     args = parser.parse_args()
@@ -121,7 +122,7 @@ if __name__ == "__main__":
 
     surface = cairo.SVGSurface(args.output_file, width, height)
     c = cairo.Context(surface)
-    c.set_line_width(1)
+    c.set_line_width(args.line_width)
 
     fractal_line = FractalLine(
             [ width / 2, height ],
