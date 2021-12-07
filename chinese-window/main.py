@@ -128,7 +128,7 @@ def is_horiz_or_vert(line):
     return ((line.coords[0][0] == line.coords[1][0]) or (line.coords[0][1] == line.coords[1][1]))
 
 def get_graph_representation(line_collection):
-    graph = nx.Graph()
+    graph = nx.DiGraph()
 
     # each line corresponds to a graph edge
     # each node is a line endpoint.
@@ -164,7 +164,7 @@ def get_graph_representation(line_collection):
     return graph
 
 
-def prune_dingleberries(graph):
+def prune_dingleberries(graph, min_length):
     # remove leaf edges with a length below a given threshold
 
     leaf_nodes = [ node for node in graph.nodes if graph.degree(node) == 1 ]
@@ -173,7 +173,7 @@ def prune_dingleberries(graph):
     removed_count = 0
     for leaf_edge in leaf_edges:
         edge_len = graph.edges[leaf_edge]["line"].length
-        if edge_len < 10:
+        if edge_len < min_length:
             removed_count += 1
             graph.remove_edge(leaf_edge[0],  leaf_edge[1])
 
@@ -221,12 +221,12 @@ class GeneratorExtent:
             raise ValueError(f"Clipped type must be linestring, instead was {linestring.type}.")
 
         result = linestring.intersection(self.bounds)
-        print("INTERSECTING:")
-        print(linestring)
-        print("WITH")
-        print(self.bounds)
-        print("RESULT")
-        print(result)
+        # print("INTERSECTING:")
+        # print(linestring)
+        # print("WITH")
+        # print(self.bounds)
+        # print("RESULT")
+        # print(result)
 
         if result.type == "MultiLineString":
             return [ l for l in result.geoms if not l.is_empty ]
@@ -246,8 +246,8 @@ class RandomLineGenerator:
         result = []
 
         result += self._get_circles(3)
-        result += self._get_vert_lines(5, 50)
-        result += self._get_horiz_lines(5, 50)
+        result += self._get_vert_lines(3, 50)
+        result += self._get_horiz_lines(3, 50)
 
         box = sh.geometry.box(extent.xMin + extent.width * 0.3, extent.yMin + extent.height * 0.3, extent.xMin + extent.width * 0.7, extent.yMin + extent.height * 0.7)
 
@@ -386,14 +386,10 @@ if __name__ == "__main__":
             lines.append(shape.boundary)
 
 
+    lines = FourPaneSymmetrizer(extent).symmetrize(lines)
 
     print(f"Splitting {len(lines)} linestrings into crossing lines")
     lines = split_intersections(lines)
-
-    #print(f"Removing horizontal or vertical lines with more than two intersection points.")
-    #simplify_intersections(lines)
-
-    lines = NoOpSymmetrizer(extent).symmetrize(lines)
 
     # Create a graph representation of the lines
     print(f"Creating graph representation")
@@ -402,10 +398,14 @@ if __name__ == "__main__":
 
     # Get minimum spanning tree
     print("Creating spanning tree")
-    graph = nx.maximum_spanning_tree(graph)
+
+    if graph.__class__ == nx.DiGraph:
+        graph = nx.DiGraph( nx.algorithms.tree.branchings.Edmonds(graph).find_optimum(preserve_attrs=True) )
+    else:
+        graph = nx.minimum_spanning_tree(graph)
 
     print("Pruning dingleberries ;)")
-    graph = prune_dingleberries(graph)
+    graph = prune_dingleberries(graph, 3)
 
     # Create a multi-line string and buffer it to generate an outline
     lines = [ graph.edges[e]["line"] for e in graph.edges ]
