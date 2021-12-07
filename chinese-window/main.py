@@ -163,33 +163,6 @@ def get_graph_representation(line_collection):
 
     return graph
 
-def symmetrize(lines):
-
-    print(f"Scaling everything/mirroring")
-    lines_next = []
-    for line in lines:
-        center = (SVG_WIDTH/2, SVG_HEIGHT/2)
-
-        line_bottom_left = \
-            sh.affinity.scale(line, xfact=0.5, yfact=0.5, origin=(0, 0))
-        line_bottom_left = \
-            sh.affinity.translate(line_bottom_left, xoff=SVG_WIDTH/2, yoff=SVG_HEIGHT/2)
-
-        line_bottom_right = \
-            sh.affinity.scale(line_bottom_left, xfact=-1, yfact=1, origin=center)
-
-        line_top_right = \
-            sh.affinity.scale(line_bottom_right, xfact=1, yfact=-1, origin=center)
-
-        line_top_left = \
-            sh.affinity.scale(line_bottom_left, xfact=1, yfact=-1, origin=center)
-
-        lines_next.append(line_bottom_left)
-        lines_next.append(line_bottom_right)
-        lines_next.append(line_top_left)
-        lines_next.append(line_top_right)
-
-    return lines_next
 
 def prune_dingleberries(graph):
     # remove leaf edges with a length below a given threshold
@@ -235,6 +208,7 @@ class GeneratorExtent:
         self.width = xMax - xMin
         self.height = yMax - yMin
         self.bounds = sh.geometry.box(self.xMin, self.yMin, self.xMax, self.yMax)
+        self.center = (self.xMin + self.width / 2, self.yMin + self.height / 2)
 
     def random_point(self):
         x = random.uniform(self.xMin, self.xMax)
@@ -244,7 +218,7 @@ class GeneratorExtent:
 
     def clip_linestring(self, linestring):
         if linestring.type != "LineString":
-            raise ValueError("Clipped type must be linestring.")
+            raise ValueError(f"Clipped type must be linestring, instead was {linestring.type}.")
 
         result = linestring.intersection(self.bounds)
         print("INTERSECTING:")
@@ -330,10 +304,12 @@ class CirclesShapeGenerator:
 
     def _get_circle(self):
         x, y = self.extent.random_point()
-        r = math.hypot(self.extent.width, self.extent.height) * random.uniform(0.1, 1)
+        r = self.extent.bounds.exterior.distance(sh.geometry.Point(x, y))
+
+        print(r)
 
         circle_poly = sh.geometry.Point(x, y).buffer(r)
-        #print(circle_poly.boundary)
+        print(circle_poly.boundary)
 
         result = []
 
@@ -343,6 +319,45 @@ class CirclesShapeGenerator:
 
         return result
 
+class NoOpSymmetrizer:
+
+    def __init__(self, extent):
+        self.extent = extent
+
+    def symmetrize(self, lines):
+        return lines
+
+class FourPaneSymmetrizer:
+
+    def __init__(self, extent):
+        self.extent = extent
+
+    def symmetrize(self, lines):
+        print(f"Scaling everything/mirroring")
+        lines_next = []
+        for line in lines:
+            center = extent.center
+
+            line_bottom_left = \
+                sh.affinity.scale(line, xfact=0.5, yfact=0.5, origin=(0, 0))
+            line_bottom_left = \
+                sh.affinity.translate(line_bottom_left, xoff=SVG_WIDTH/2, yoff=SVG_HEIGHT/2)
+
+            line_bottom_right = \
+                sh.affinity.scale(line_bottom_left, xfact=-1, yfact=1, origin=center)
+
+            line_top_right = \
+                sh.affinity.scale(line_bottom_right, xfact=1, yfact=-1, origin=center)
+
+            line_top_left = \
+                sh.affinity.scale(line_bottom_left, xfact=1, yfact=-1, origin=center)
+
+            lines_next.append(line_bottom_left)
+            lines_next.append(line_bottom_right)
+            lines_next.append(line_top_left)
+            lines_next.append(line_top_right)
+
+        return lines_next
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -378,7 +393,7 @@ if __name__ == "__main__":
     #print(f"Removing horizontal or vertical lines with more than two intersection points.")
     #simplify_intersections(lines)
 
-    lines = symmetrize(lines)
+    lines = NoOpSymmetrizer(extent).symmetrize(lines)
 
     # Create a graph representation of the lines
     print(f"Creating graph representation")
@@ -387,7 +402,7 @@ if __name__ == "__main__":
 
     # Get minimum spanning tree
     print("Creating spanning tree")
-    graph = nx.minimum_spanning_tree(graph)
+    graph = nx.maximum_spanning_tree(graph)
 
     print("Pruning dingleberries ;)")
     graph = prune_dingleberries(graph)
