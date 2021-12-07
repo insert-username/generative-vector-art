@@ -23,47 +23,7 @@ def get_simple_line_angle(line):
 
     return np.arctan2(coord1[0] - coord0[0], coord1[1] - coord0[1])
 
-def get_distributed_values(minval, maxval, count, closest_tolerance=0.2):
-    values = []
 
-    if (abs(maxval - minval) / closest_tolerance < count):
-        raise ValueError("Number of requested values within tolerance is impossible.")
-
-    while len(values) < count:
-        candidate = random.uniform(minval, maxval)
-
-        if not any(abs(v - candidate) < closest_tolerance for v in values):
-            values.append(candidate)
-
-    return values
-
-def get_circles(svg_width, svg_height, count):
-    bounds = sh.geometry.box(0, 0, svg_width, svg_height)
-
-    result = []
-    for r in get_distributed_values(0.2 * svg_width, 0.9 * svg_width, count, closest_tolerance=0.05*svg_width):
-        resolution = 100
-        points = []
-        for i in range(0, resolution + 1):
-            theta = math.pi * i / resolution
-            x = r * math.cos(theta)
-            y = r * math.sin(theta)
-
-            points.append((x,y))
-
-        result.append(sh.geometry.LineString(points))
-
-    return result
-
-def get_horiz_lines(svg_width, svg_height, count, tolerance):
-
-    return [ sh.geometry.LineString([ (0, ycoord), (svg_width, ycoord)  ]) \
-            for ycoord in get_distributed_values(tolerance, svg_height - tolerance / 2, count, tolerance) ]
-
-def get_vert_lines(svg_width, svg_height, count, tolerance):
-
-    return [ sh.geometry.LineString([ (coord, 0), (coord, svg_height)  ]) \
-            for coord in get_distributed_values(tolerance / 2, svg_width - tolerance / 2, count, tolerance) ]
 
 
 def simplify_cross_step(line_collection):
@@ -248,6 +208,142 @@ def prune_dingleberries(graph):
 
     return graph
 
+class RandomUtils:
+
+    @staticmethod
+    def get_distributed_values(minval, maxval, count, closest_tolerance=0.2):
+        values = []
+
+        if (abs(maxval - minval) / closest_tolerance < count):
+            raise ValueError("Number of requested values within tolerance is impossible.")
+
+        while len(values) < count:
+            candidate = random.uniform(minval, maxval)
+
+            if not any(abs(v - candidate) < closest_tolerance for v in values):
+                values.append(candidate)
+
+        return values
+
+class GeneratorExtent:
+
+    def __init__(self, xMin, yMin, xMax, yMax):
+        self.xMin = xMin
+        self.xMax = xMax
+        self.yMin = yMin
+        self.yMax = yMax
+        self.width = xMax - xMin
+        self.height = yMax - yMin
+        self.bounds = sh.geometry.box(self.xMin, self.yMin, self.xMax, self.yMax)
+
+    def random_point(self):
+        x = random.uniform(self.xMin, self.xMax)
+        y = random.uniform(self.yMin, self.yMax)
+
+        return (x, y)
+
+    def clip_linestring(self, linestring):
+        if linestring.type != "LineString":
+            raise ValueError("Clipped type must be linestring.")
+
+        result = linestring.intersection(self.bounds)
+        print("INTERSECTING:")
+        print(linestring)
+        print("WITH")
+        print(self.bounds)
+        print("RESULT")
+        print(result)
+
+        if result.type == "MultiLineString":
+            return [ l for l in result.geoms if not l.is_empty ]
+        elif not result.empty:
+            return [ result ]
+        else:
+            return []
+
+class RandomLineGenerator:
+
+    def __init__(self, extent):
+        self.extent = extent
+
+    def get_linestrings(self):
+        extent = self.extent
+
+        result = []
+
+        result += self._get_circles(3)
+        result += self._get_vert_lines(5, 50)
+        result += self._get_horiz_lines(5, 50)
+
+        box = sh.geometry.box(extent.xMin + extent.width * 0.3, extent.yMin + extent.height * 0.3, extent.xMin + extent.width * 0.7, extent.yMin + extent.height * 0.7)
+
+        result.append(sh.affinity.rotate(box, 45).boundary)
+
+        result.append(sh.geometry.LineString([  ( \
+                extent.xMin + random.uniform(0, extent.width),) * 2, \
+                (extent.xMax, extent.yMax)]))
+        result.append(sh.geometry.LineString([  (extent.xMin + random.uniform(0, extent.width),0),       (extent.xMax, extent.yMin)   ]  ))
+        result.append(sh.geometry.LineString([  (extent.xMin,  random.uniform(0, extent.width)),         (extent.yMin, extent.yMax)  ] ))
+
+        return result
+
+    def _get_circles(self, count):
+        result = []
+        for r in RandomUtils.get_distributed_values(extent.xMin + 0.2 * extent.width, extent.xMin + 0.9 * extent.width, count, closest_tolerance=0.05 * extent.width):
+            resolution = 100
+            points = []
+            for i in range(0, resolution + 1):
+                theta = math.pi * i / resolution
+                x = r * math.cos(theta)
+                y = r * math.sin(theta)
+
+                points.append((x,y))
+
+            result.append(sh.geometry.LineString(points))
+
+        return result
+
+    def _get_horiz_lines(self, count, tolerance):
+
+        return [ sh.geometry.LineString([ (extent.xMin, coord), (extent.xMax, coord)  ]) \
+                for coord in RandomUtils.get_distributed_values(extent.yMin + tolerance / 2, extent.yMax - tolerance / 2, count, tolerance) ]
+
+    def _get_vert_lines(self, count, tolerance):
+
+        return [ sh.geometry.LineString([ (coord, extent.yMin), (coord, extent.yMax)  ]) \
+                for coord in RandomUtils.get_distributed_values(extent.xMin + tolerance / 2, extent.xMax - tolerance / 2, count, tolerance) ]
+
+class CirclesShapeGenerator:
+
+    def __init__(self, extent):
+        self.extent = extent
+
+    def get_linestrings(self):
+        result = []
+
+        for i in range(0,15):
+            circle_linestrings = self._get_circle()
+
+            result += [ c for c in circle_linestrings ]
+
+        return result
+
+    def _get_circle(self):
+        x, y = self.extent.random_point()
+        r = math.hypot(self.extent.width, self.extent.height) * random.uniform(0.1, 1)
+
+        circle_poly = sh.geometry.Point(x, y).buffer(r)
+        #print(circle_poly.boundary)
+
+        result = []
+
+        for ls in self.extent.clip_linestring(circle_poly.boundary):
+            print(ls)
+            result.append(ls)
+
+        return result
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("output", metavar="OUTPUT")
@@ -259,17 +355,9 @@ if __name__ == "__main__":
     c = cairo.Context(surface)
     c.set_line_width(2)
 
-    shapes = []
+    extent = GeneratorExtent(0, 0, SVG_WIDTH, SVG_HEIGHT)
 
-    shapes += get_circles(SVG_WIDTH, SVG_HEIGHT, 3)
-    shapes += get_vert_lines(SVG_WIDTH, SVG_HEIGHT, 5, 50)
-    shapes += get_horiz_lines(SVG_WIDTH, SVG_HEIGHT, 5, 50)
-    shapes.append(
-            sh.affinity.rotate(sh.geometry.box(SVG_WIDTH * 0.3, SVG_WIDTH * 0.3, SVG_WIDTH * 0.6, SVG_WIDTH * 0.6), 45).boundary)
-
-    shapes.append(sh.geometry.LineString([  (random.uniform(0, SVG_WIDTH),) * 2, (SVG_WIDTH, SVG_HEIGHT)]))
-    shapes.append(sh.geometry.LineString([  (random.uniform(0, SVG_WIDTH),0), (SVG_WIDTH, 0)   ]  ))
-    shapes.append(sh.geometry.LineString([  (0,random.uniform(0, SVG_WIDTH)), (0, SVG_HEIGHT)  ] ))
+    shapes = CirclesShapeGenerator(extent).get_linestrings()
 
     for s in shapes:
         if not (s.type == "LineString" or s.type == "Polygon"):
@@ -309,7 +397,7 @@ if __name__ == "__main__":
 
     mls = sh.geometry.MultiLineString(lines)
 
-    outline = mls.buffer(5, \
+    outline = mls.buffer(1, \
             cap_style=sh.geometry.CAP_STYLE.square, \
             join_style=sh.geometry.JOIN_STYLE.mitre)
 
