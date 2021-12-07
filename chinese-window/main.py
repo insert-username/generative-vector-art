@@ -231,6 +231,23 @@ def symmetrize(lines):
 
     return lines_next
 
+def prune_dingleberries(graph):
+    # remove leaf edges with a length below a given threshold
+
+    leaf_nodes = [ node for node in graph.nodes if graph.degree(node) == 1 ]
+    leaf_edges = [ edge for edge in graph.edges if graph.degree(edge[0]) == 1 or graph.degree(edge[1]) == 1 ]
+
+    removed_count = 0
+    for leaf_edge in leaf_edges:
+        edge_len = graph.edges[leaf_edge]["line"].length
+        if edge_len < 10:
+            removed_count += 1
+            graph.remove_edge(leaf_edge[0],  leaf_edge[1])
+
+    print(f"Removed {removed_count} dingleberries")
+
+    return graph
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("output", metavar="OUTPUT")
@@ -281,7 +298,11 @@ if __name__ == "__main__":
     print(graph)
 
     # Get minimum spanning tree
+    print("Creating spanning tree")
     graph = nx.minimum_spanning_tree(graph)
+
+    print("Pruning dingleberries ;)")
+    graph = prune_dingleberries(graph)
 
     # Create a multi-line string and buffer it to generate an outline
     lines = [ graph.edges[e]["line"] for e in graph.edges ]
@@ -289,8 +310,8 @@ if __name__ == "__main__":
     mls = sh.geometry.MultiLineString(lines)
 
     outline = mls.buffer(5, \
-            cap_style=sh.geometry.CAP_STYLE.round, \
-            join_style=sh.geometry.JOIN_STYLE.round)
+            cap_style=sh.geometry.CAP_STYLE.square, \
+            join_style=sh.geometry.JOIN_STYLE.mitre)
 
     polys = []
     print(outline.type)
