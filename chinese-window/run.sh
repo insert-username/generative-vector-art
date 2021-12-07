@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 
-./main.py output1.svg
-./main.py output2.svg
-./main.py output3.svg
-./main.py output4.svg
+set -e
 
-eog *.svg
+output_file=$(mktemp output/outputXXX.svg)
+
+./main.py $output_file
+
+eog $output_file

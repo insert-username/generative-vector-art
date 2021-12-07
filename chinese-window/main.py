@@ -3,7 +3,11 @@
 import shapely as sh
 import shapely.ops as sho
 
+import networkx as nx
+
 import numpy as np
+
+import math
 
 import cairo
 
@@ -22,6 +26,9 @@ def get_simple_line_angle(line):
 def get_distributed_values(minval, maxval, count, closest_tolerance=0.2):
     values = []
 
+    if (abs(maxval - minval) / closest_tolerance < count):
+        raise ValueError("Number of requested values within tolerance is impossible.")
+
     while len(values) < count:
         candidate = random.uniform(minval, maxval)
 
@@ -34,28 +41,29 @@ def get_circles(svg_width, svg_height, count):
     bounds = sh.geometry.box(0, 0, svg_width, svg_height)
 
     result = []
-    for r in get_distributed_values(0.2 * svg_width, 0.9 * svg_width, count):
-        circle = sh.geometry.Point(0, 0).buffer(r, resolution=100)
+    for r in get_distributed_values(0.2 * svg_width, 0.9 * svg_width, count, closest_tolerance=0.05*svg_width):
+        resolution = 100
+        points = []
+        for i in range(0, resolution + 1):
+            theta = math.pi * i / resolution
+            x = r * math.cos(theta)
+            y = r * math.sin(theta)
 
-        circle_line = []
+            points.append((x,y))
 
-        for i in range(0, len(circle.boundary.coords)):
-            if bounds.contains(sh.geometry.Point(circle.boundary.coords[i])):
-                circle_line.append(circle.boundary.coords[i])
-
-        result.append(sh.geometry.LineString(circle_line))
+        result.append(sh.geometry.LineString(points))
 
     return result
 
-def get_horiz_lines(svg_width, svg_height, count):
+def get_horiz_lines(svg_width, svg_height, count, tolerance):
 
     return [ sh.geometry.LineString([ (0, ycoord), (svg_width, ycoord)  ]) \
-            for ycoord in get_distributed_values(svg_height * 0.1, svg_height * 0.9, count) ]
+            for ycoord in get_distributed_values(tolerance, svg_height - tolerance / 2, count, tolerance) ]
 
-def get_vert_lines(svg_width, svg_height, count):
+def get_vert_lines(svg_width, svg_height, count, tolerance):
 
     return [ sh.geometry.LineString([ (coord, 0), (coord, svg_height)  ]) \
-            for coord in get_distributed_values(svg_width * 0.1, svg_width * 0.9, count) ]
+            for coord in get_distributed_values(tolerance / 2, svg_width - tolerance / 2, count, tolerance) ]
 
 
 def simplify_cross_step(line_collection):
@@ -93,96 +101,109 @@ def simplify_cross(line_collection):
             # nothing was done
             return
 
+# returns true if the specified lineA
+# is able to cut lineB into more than
+# one linestring
+def will_cut(lineA, lineB):
+    return (lineA.touches(lineB) or lineA.crosses(lineB)) and lineB.difference(lineA).type == "MultiLineString"
+
+def will_any_cut(cutter_collection, cutee_collection):
+    for cutter in cutter_collection:
+        for cutee in cutee_collection:
+            if will_cut(cutter, cutee):
+                return True
+
+    return False
+
+def cut_against(line_to_cut, lines):
+
+    # first establish which lines intersect
+    intersecting_lines = [ l for l in lines if (l.touches(line_to_cut) or l.crosses(line_to_cut)) and line_to_cut.difference(l).type == "MultiLineString" ]
+
+    #print(f"Line {line_to_cut} has {len(intersecting_lines)} intersecting lines,")
+
+    result = [ line_to_cut ]
+    has_cut = True
+    while will_any_cut(intersecting_lines, result):
+        print(len(result))
+        for i in range(0, len(result)):
+            sub_line = result[i]
+            sub_intersecting = [ (i, l) for i, l in enumerate(intersecting_lines) if will_cut(l, sub_line) ]
+
+            if len(sub_intersecting) == 0:
+                continue
+            else:
+                diff = sub_line.difference(sub_intersecting[0][1]).geoms
+                #print(f"Cut subline { sub_line } into:")
+                #for l in diff:
+                #    print(f"    {l}")
+                #print(f"Via: {sub_intersecting[0][1]}")
+
+                del result[i]
+                result += diff
+
+                break
+
+    #print(f"{line_to_cut} became {len(result)} separate segments.")
+    return result
+
+
+def split_intersections(lines):
+    new_lines = []
+
+    for line in lines:
+        new_lines += cut_against(line, [ l for l in lines if l != line ])
+
+    # possible some lines are multilineStrings
+    for line in new_lines:
+        if not line.type == "LineString":
+            raise RuntimeError(f"Result of line split was not type LineString: {line}")
+
+    print(f"Split {len(lines)} original lines into {len(new_lines)} split lines:")
+    print()
+
+    return new_lines
+
 def is_horiz_or_vert(line):
     return ((line.coords[0][0] == line.coords[1][0]) or (line.coords[0][1] == line.coords[1][1]))
 
-def simplify_intersections_step(line_collection):
-    intersections = {}
+def get_graph_representation(line_collection):
+    graph = nx.Graph()
+
+    # each line corresponds to a graph edge
+    # each node is a line endpoint.
+
+    def append_node(node):
+        for existing_node in graph.nodes:
+            dist = math.hypot(node[0] - existing_node[0], node[1] - existing_node[1])
+
+            #tolerance seems to be needed due to small floating point errors
+            if dist < 0.1:
+                return existing_node
+
+        graph.add_node(node)
+        return node
+
+    max_line_length = max(l.length for l in line_collection)
+    min_line_length = min(l.length for l in line_collection)
 
     for i in range(0, len(line_collection)):
-        lineA = line_collection[i]
-        if not is_horiz_or_vert(lineA):
-            # do not consider non horizontal/vertical lines
-            continue
+        line = line_collection[i]
 
-        intersections[i] = []
-        for j in range(0, len(line_collection)):
-            if i == j:
-                continue
+        n0 = append_node(line.coords[0])
+        n1 = append_node(line.coords[-1])
 
-            lineB = line_collection[j]
+        weight = line.length
 
-            if lineA.touches(lineB) and is_horiz_or_vert(lineB):
-                intersections[i].append(j)
+        #weight = random.uniform(min_line_length, max_line_length)
 
-    for i in range(0, len(line_collection)):
-        if i in intersections and len(intersections[i]) > 2:
-            intersecting_lines = intersections[i]
-            intersecting_lines.sort(key=lambda x: len(intersections[x]))
+        if line.length != 0:
+            # todo: there should not be any zero length lines!
+            graph.add_edge(n0, n1, weight=weight, line=line)
 
-            minimum_connector = intersecting_lines[0]
+    return graph
 
-            #connector should be attached to at least one other line
-            if len(intersections[minimum_connector]) > 2:
-                print(f"Removing element {minimum_connector}")
-                del line_collection[minimum_connector]
-                return
-
-
-def simplify_intersections(line_collection):
-    while True:
-        init_len = len(line_collection)
-        simplify_intersections_step(line_collection)
-        if len(line_collection) == init_len:
-            return
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("output", metavar="OUTPUT")
-    args = parser.parse_args()
-
-    SVG_WIDTH = 400
-    SVG_HEIGHT = 400
-    surface = cairo.SVGSurface(args.output, SVG_WIDTH, SVG_HEIGHT)
-    c = cairo.Context(surface)
-    c.set_line_width(2)
-
-    shapes = []
-
-    shapes += get_circles(SVG_WIDTH, SVG_HEIGHT, 6)
-    shapes += get_vert_lines(SVG_WIDTH, SVG_HEIGHT, 6)
-    shapes += get_horiz_lines(SVG_WIDTH, SVG_HEIGHT, 6)
-    shapes.append(sh.geometry.LineString([(0,0), (SVG_WIDTH, SVG_HEIGHT)]))
-
-    for shape in shapes:
-        print(shape)
-
-    for s in shapes:
-        if not (s.type == "LineString" or s.type == "Polygon"):
-            raise RuntimeError(f"All shape types must be linestring, but encountered {s}")
-
-    # end up with a collection of linestrings
-    # linestring.crosses(other)
-
-    lines = []
-    for shape in shapes:
-        if shape.type == "LineString":
-            lines.append(shape)
-        else:
-            lines.append(shape.boundary)
-
-    print(f"Splitting {len(lines)} linestrings into crossing lines")
-    simplify_cross(lines)
-
-    print(f"Removing horizontal or vertical lines with more than two intersection points.")
-    simplify_intersections(lines)
-
-    lines_next = []
-    for line in lines:
-        if random.uniform(0,1) > 0.5:
-            lines_next.append(line)
-
-    lines = lines_next
+def symmetrize(lines):
 
     print(f"Scaling everything/mirroring")
     lines_next = []
@@ -208,20 +229,104 @@ if __name__ == "__main__":
         lines_next.append(line_top_left)
         lines_next.append(line_top_right)
 
+    return lines_next
 
-    lines = lines_next
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("output", metavar="OUTPUT")
+    args = parser.parse_args()
 
-    print(f"Drawing {len(lines)} lines...")
-    for line in lines:
+    SVG_WIDTH = 400
+    SVG_HEIGHT = 400
+    surface = cairo.SVGSurface(args.output, SVG_WIDTH, SVG_HEIGHT)
+    c = cairo.Context(surface)
+    c.set_line_width(2)
 
-        coords = [ coord for coord in line.coords ]
+    shapes = []
 
-        c.move_to(coords[0][0], coords[0][1])
-        for coord in coords:
-            c.line_to(coord[0], coord[1])
+    shapes += get_circles(SVG_WIDTH, SVG_HEIGHT, 3)
+    shapes += get_vert_lines(SVG_WIDTH, SVG_HEIGHT, 5, 50)
+    shapes += get_horiz_lines(SVG_WIDTH, SVG_HEIGHT, 5, 50)
+    shapes.append(
+            sh.affinity.rotate(sh.geometry.box(SVG_WIDTH * 0.3, SVG_WIDTH * 0.3, SVG_WIDTH * 0.6, SVG_WIDTH * 0.6), 45).boundary)
 
-        #c.set_source_rgba(random.uniform(0,0.5),random.uniform(0,0.5),random.uniform(0,0.5),1)
-        c.stroke()
+    shapes.append(sh.geometry.LineString([  (random.uniform(0, SVG_WIDTH),) * 2, (SVG_WIDTH, SVG_HEIGHT)]))
+    shapes.append(sh.geometry.LineString([  (random.uniform(0, SVG_WIDTH),0), (SVG_WIDTH, 0)   ]  ))
+    shapes.append(sh.geometry.LineString([  (0,random.uniform(0, SVG_WIDTH)), (0, SVG_HEIGHT)  ] ))
+
+    for s in shapes:
+        if not (s.type == "LineString" or s.type == "Polygon"):
+            raise RuntimeError(f"All shape types must be linestring, but encountered {s}")
+
+    lines = []
+    for shape in shapes:
+        if shape.type == "LineString":
+            lines.append(shape)
+        else:
+            lines.append(shape.boundary)
+
+
+
+    print(f"Splitting {len(lines)} linestrings into crossing lines")
+    lines = split_intersections(lines)
+
+    #print(f"Removing horizontal or vertical lines with more than two intersection points.")
+    #simplify_intersections(lines)
+
+    lines = symmetrize(lines)
+
+    # Create a graph representation of the lines
+    print(f"Creating graph representation")
+    graph = get_graph_representation(lines)
+    print(graph)
+
+    # Get minimum spanning tree
+    graph = nx.minimum_spanning_tree(graph)
+
+    # Create a multi-line string and buffer it to generate an outline
+    lines = [ graph.edges[e]["line"] for e in graph.edges ]
+
+    mls = sh.geometry.MultiLineString(lines)
+
+    outline = mls.buffer(5, \
+            cap_style=sh.geometry.CAP_STYLE.round, \
+            join_style=sh.geometry.JOIN_STYLE.round)
+
+    polys = []
+    print(outline.type)
+    if outline.type == "Polygon":
+        polys = [ outline ]
+    elif outline.type == "MultiPolygon":
+        polys = outline.geoms
+    else:
+        raise RuntimeError()
+
+    lines = []
+    for poly in polys:
+        print(f"Drawing polygon {poly.boundary.type}")
+        lines = poly.boundary.geoms if poly.boundary.type == "MultiLineString" else [ poly.boundary ]
+
+        c.new_path()
+        for line in lines:
+            coords = [ coord for coord in line.coords ]
+
+            c.set_source_rgba(0,0,0,1)
+            c.set_line_cap(cairo.LineCap.ROUND)
+
+            c.move_to(coords[0][0], coords[0][1])
+            for coord in coords:
+                c.line_to(coord[0], coord[1])
+
+            #c.set_source_rgba(random.uniform(0,0.5),random.uniform(0,0.5),random.uniform(0,0.5),1)
+            #c.stroke()
+
+        c.close_path()
+        c.set_source_rgba(0,0,0,1)
+        c.stroke_preserve()
+        c.set_source_rgba(1,0,0,1)
+        c.fill()
+
+
 
     print("Saving")
 
