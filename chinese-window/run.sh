@@ -2,8 +2,14 @@
 
 set -e
 
-output_file=$(mktemp output/outputXXX.svg)
+rm output/*.svg
 
-./main.py $output_file
+for i in {1..10}; do
 
-eog $output_file
+    output_file=$(mktemp output/outputXXX.svg)
+
+    ./main.py $output_file
+
+done
+
+#eog $output_file

@@ -128,7 +128,7 @@ def is_horiz_or_vert(line):
     return ((line.coords[0][0] == line.coords[1][0]) or (line.coords[0][1] == line.coords[1][1]))
 
 def get_graph_representation(line_collection):
-    graph = nx.DiGraph()
+    graph = nx.Graph()
 
     # each line corresponds to a graph edge
     # each node is a line endpoint.
@@ -138,7 +138,7 @@ def get_graph_representation(line_collection):
             dist = math.hypot(node[0] - existing_node[0], node[1] - existing_node[1])
 
             #tolerance seems to be needed due to small floating point errors
-            if dist < 0.1:
+            if dist < 1:
                 return existing_node
 
         graph.add_node(node)
@@ -153,13 +153,23 @@ def get_graph_representation(line_collection):
         n0 = append_node(line.coords[0])
         n1 = append_node(line.coords[-1])
 
-        weight = line.length
+        new_line_coords = []
+        for j in range(0, len(line.coords)):
+            if j == 0:
+                new_line_coords.append(n0)
+            elif j == len(line.coords) - 1:
+                new_line_coords.append(n1)
+            else:
+                new_line_coords.append(line.coords[j])
+
+        new_line = sh.geometry.LineString(new_line_coords)
+        weight = new_line.length
 
         #weight = random.uniform(min_line_length, max_line_length)
 
-        if line.length != 0:
+        if new_line.length != 0:
             # todo: there should not be any zero length lines!
-            graph.add_edge(n0, n1, weight=weight, line=line)
+            graph.add_edge(n0, n1, weight=weight, line=new_line)
 
     return graph
 
@@ -216,9 +226,28 @@ class GeneratorExtent:
 
         return (x, y)
 
+    def x_subdivisions(self, count):
+        if count < 2:
+            raise ValueError("Value must be at least 2")
+
+        x_increment = self.width / count
+
+        return np.arange(self.xMin, self.xMax, x_increment)
+
+    def y_subdivisions(self, count):
+        if count < 2:
+            raise ValueError("Value must be at least 2")
+
+        y_increment = self.height / count
+
+        return np.arange(self.yMin, self.yMax, y_increment)
+
     def clip_linestring(self, linestring):
         if linestring.type != "LineString":
             raise ValueError(f"Clipped type must be linestring, instead was {linestring.type}.")
+
+        if self.bounds.contains(linestring):
+            return [ linestring ]
 
         result = linestring.intersection(self.bounds)
         # print("INTERSECTING:")
@@ -234,6 +263,27 @@ class GeneratorExtent:
             return [ result ]
         else:
             return []
+
+class RectanglesGenerator:
+
+    def __init__(self, extent):
+        self.extent = extent
+
+    def get_linestrings(self):
+        result = []
+
+
+        for x in self.extent.x_subdivisions(4):
+            for y in self.extent.y_subdivisions(4):
+                box_width = random.uniform(50, 200)
+                box_height = random.uniform(50, 200)
+
+                box = sh.geometry.box(x, y, x + box_width, y + box_height)
+                box = sh.affinity.rotate(box, 60)
+                result += self.extent.clip_linestring(box.boundary)
+
+        return result
+
 
 class RandomLineGenerator:
 
@@ -368,11 +418,11 @@ if __name__ == "__main__":
     SVG_HEIGHT = 400
     surface = cairo.SVGSurface(args.output, SVG_WIDTH, SVG_HEIGHT)
     c = cairo.Context(surface)
-    c.set_line_width(2)
+    c.set_line_width(1)
 
     extent = GeneratorExtent(0, 0, SVG_WIDTH, SVG_HEIGHT)
 
-    shapes = CirclesShapeGenerator(extent).get_linestrings()
+    shapes = RandomLineGenerator(extent).get_linestrings()
 
     for s in shapes:
         if not (s.type == "LineString" or s.type == "Polygon"):
@@ -386,10 +436,11 @@ if __name__ == "__main__":
             lines.append(shape.boundary)
 
 
-    lines = FourPaneSymmetrizer(extent).symmetrize(lines)
 
     print(f"Splitting {len(lines)} linestrings into crossing lines")
     lines = split_intersections(lines)
+
+    lines = FourPaneSymmetrizer(extent).symmetrize(lines)
 
     # Create a graph representation of the lines
     print(f"Creating graph representation")
@@ -413,8 +464,8 @@ if __name__ == "__main__":
     mls = sh.geometry.MultiLineString(lines)
 
     outline = mls.buffer(1, \
-            cap_style=sh.geometry.CAP_STYLE.square, \
-            join_style=sh.geometry.JOIN_STYLE.mitre)
+            cap_style=sh.geometry.CAP_STYLE.round, \
+            join_style=sh.geometry.JOIN_STYLE.round)
 
     polys = []
     print(outline.type)
@@ -445,9 +496,9 @@ if __name__ == "__main__":
             #c.stroke()
 
         c.close_path()
-        c.set_source_rgba(0,0,0,1)
+        c.set_source_rgba(0,0,0,0.5)
         c.stroke_preserve()
-        c.set_source_rgba(1,0,0,1)
+        c.set_source_rgba(1, 0, 0 ,1)
         c.fill()
 
 
